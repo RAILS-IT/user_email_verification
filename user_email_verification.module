@@ -1,5 +1,9 @@
 <?php
-
+/**
+ * @file
+ * This module allows you to have e-mail verification and in meanwhile allowing the users to type their own passwords.
+ * If they do not verify their accounts in a certain time interval the user will be blocked.
+ */
 // TODO: Build action for rules for e-mail verification e-mail send!
 
 /**
@@ -33,13 +37,13 @@ function user_email_verification_task($uid) {
  * @param array $roles
  * @return boolean
  */
-function user_email_verification_user_skip_roles($roles){
+function user_email_verification_user_skip_roles($roles) {
   $skip = FALSE;
   if (!empty($roles)) {
     $roles = array_keys($roles);
     $skip_roles = variable_get('user_email_verification_roles', array());
     if (!empty($skip_roles)) {
-      foreach($skip_roles as $rid => $skip_role) {
+      foreach ($skip_roles as $rid => $skip_role) {
         $skip_role = (int)$skip_role;
         if (!empty($skip_role) && in_array($skip_role, $roles)) {
           $skip = TRUE;

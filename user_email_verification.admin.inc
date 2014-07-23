@@ -1,4 +1,8 @@
 <?php
+/**
+ * @file
+ * Administrative functions required in a specific case.
+ */
 
 /**
  * Menu callback; process one time login link and redirects to the user page on success.

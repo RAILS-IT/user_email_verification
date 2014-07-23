@@ -1,4 +1,8 @@
 <?php
+/**
+ * @file
+ * The module installation functions.
+ */
 
 /**
  * Implements hook_enable()

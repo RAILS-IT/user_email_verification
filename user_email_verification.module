@@ -14,6 +14,10 @@ function user_email_verification_cron_queue_info() {
     'worker callback' => 'user_email_verification_task',
     'time' => 15,
   );
+  $queues['user_email_verification_reminders'] = array(
+    'worker callback' => 'user_email_verification_reminder',
+    'time' => 15,
+  );
   return $queues;
 }
 
@@ -25,52 +29,61 @@ function user_email_verification_cron_queue_info() {
  */
 function user_email_verification_task($uid) {
   $account = user_load($uid);
-
-  if (!empty($account->roles) && !user_email_verification_user_skip_roles($account->roles)) {
-    $account->status = 0;
-    user_save($account);
-  }
+  $account->status = 0;
+  user_save($account);
 }
 
 /**
- * Check if the user has a skip role.
- * @param array $roles
- * @return boolean
+ * Queue worker callback for sending a single reminder.
+ *
+ * @param array $task
+ *   The task to process.
  */
-function user_email_verification_user_skip_roles($roles) {
-  $skip = FALSE;
-  if (!empty($roles)) {
-    $roles = array_keys($roles);
-    $skip_roles = variable_get('user_email_verification_roles', array());
-    if (!empty($skip_roles)) {
-      foreach ($skip_roles as $rid => $skip_role) {
-        $skip_role = (int)$skip_role;
-        if (!empty($skip_role) && in_array($skip_role, $roles)) {
-          $skip = TRUE;
-          break;
-        }
-      }
-    }
+function user_email_verification_reminder($uid) {
+  $account = user_load($uid);
+  $params['account'] = $account;
+  $language = user_preferred_language($account);
+  $mail = drupal_mail('user_email_verification', 'verify', $account->mail, $language, $params);
+  // If sending was successful.
+  if (!empty($mail['result'])) {
+    db_update('user_email_verification')
+      ->condition('uid', $account->uid)
+      ->expression('reminders', 'reminders + 1')
+      ->fields(array('last_reminder' => REQUEST_TIME))
+      ->execute();
   }
-
-  return $skip;
 }
 
 /**
  * Implements hook_cron().
  */
 function user_email_verification_cron() {
-  $timestamp = time();
   $interval = variable_get('user_email_verification_validate_interval', 86400);
+  $num_reminders = variable_get('user_email_verification_num_reminders', 0);
+  $reminder_interval = $interval / ($num_reminders+1);
 
+  $skip_roles = variable_get('user_email_verification_roles', array());
+  $skip_roles = array_filter($skip_roles);
+
+  // Select those that need to be blocked.
   $query = db_select('user_email_verification', 'uev');
   $query->join('users', 'u', 'uev.uid = u.uid');
 
-  $result  = $query
+  if (!empty($skip_roles)) {
+    $query->leftJoin('users_roles', 'ur', 'ur.uid = uev.uid');
+    $query->distinct('uev.uid');
+    $or = db_or()
+      ->condition('ur.rid', array_keys($skip_roles), 'NOT IN')
+      ->isNull('ur.rid'); // normal registered users don't have an entry in the users_roles table.
+    $query->condition($or);
+  }
+
+  $result = $query
     ->fields('u', array('uid'))
     ->condition('uev.verified', 0, '=')
     ->condition('u.uid', 1, '>')
-    ->condition('u.created', $timestamp - $interval, '<')
+    ->condition('uev.last_reminder', REQUEST_TIME - $reminder_interval, '<')
+    ->condition('uev.reminders', $num_reminders, '>=')
     ->execute();
 
   $queue = DrupalQueue::get('user_email_verification_tasks');
@@ -78,6 +91,31 @@ function user_email_verification_cron() {
     $queue->createItem($account->uid);
   }
 
+  // Select those that need to be sent a reminder.
+  $query = db_select('user_email_verification', 'uev');
+  $query->join('users', 'u', 'uev.uid = u.uid');
+
+  if (!empty($skip_roles)) {
+    $query->leftJoin('users_roles', 'ur', 'ur.uid = uev.uid');
+    $query->distinct('uev.uid');
+    $or = db_or()
+      ->condition('ur.rid', array_keys($skip_roles), 'NOT IN')
+      ->isNull('ur.rid'); // normal registered users don't have an entry in the users_roles table.
+    $query->condition($or);
+  }
+
+  $result = $query
+    ->fields('u', array('uid'))
+    ->condition('uev.verified', 0, '=')
+    ->condition('u.uid', 1, '>')
+    ->condition('uev.last_reminder', REQUEST_TIME - $reminder_interval, '<')
+    ->condition('uev.reminders', $num_reminders, '<')
+    ->execute();
+
+  $queue = DrupalQueue::get('user_email_verification_reminders');
+  foreach ($result as $account) {
+    $queue->createItem($account->uid);
+  }
 }
 
 /**
@@ -135,6 +173,20 @@ function user_email_verification_form_user_admin_settings_alter(&$form, &$form_s
     '#element_validate' => array('element_validate_number'),
   );
 
+  $form['user_email_verification']['user_email_verification_num_reminders'] = array(
+    '#type' => 'select',
+    '#title' => t('Send reminder'),
+    '#options' => array(
+      0 => '- never -',
+      1 => 'Once',
+      2 => 'Twice',
+      3 => 'Three times',
+    ),
+    '#required' => TRUE,
+    '#default_value' => variable_get('user_email_verification_num_reminders', 0),
+    '#description' => t('Select the number of reminders to be sent spread equally through the time interval in which the user must validate his/her e-mail.'),
+  );
+
   //TODO: Add the e-mail templates to be manageble through account settings.
 }
 
@@ -154,6 +206,8 @@ function user_email_verification_user_insert(&$edit, $account, $category) {
     ->values(array(
       'uid'        => $account->uid,
       'verified'   => 0,
+      'last_reminder' => REQUEST_TIME,
+      'reminders' => 0,
     ))
     ->execute();
 }

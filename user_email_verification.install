@@ -45,10 +45,25 @@ function user_email_verification_schema() {
         'unsigned' => TRUE,
         'default' => 0,
       ),
+      'last_reminder' => array(
+        'type' => 'int',
+        'description' => 'Last notification timestamp.',
+        'not null' => TRUE,
+        'unsigned' => TRUE,
+        'default' => 0,
+      ),
+      'reminders' => array(
+        'type' => 'int',
+        'description' => 'Number of reminders sent.',
+        'not null' => TRUE,
+        'unsigned' => TRUE,
+        'default' => 0,
+      ),
     ),
     'indexes' => array(
       'inx_uid'      => array('uid'),
       'inx_verified'  => array('verified'),
+      'inx_last_reminder'  => array('last_reminder'),
     ),
     'unique keys' => array(),
     'foreign keys' => array(
@@ -60,4 +75,33 @@ function user_email_verification_schema() {
     'primary key' => array('uid'),
   );
   return $schema;
+}
+
+/**
+ * Modifies the schema to allow sending reminders.
+ */
+function user_email_verification_update_7001() {
+  db_add_field('user_email_verification', 'last_reminder',
+    array(
+      'type' => 'int',
+      'description' => 'Last notification timestamp.',
+      'not null' => TRUE,
+      'unsigned' => TRUE,
+      'default' => 0,
+    ),
+    array(
+      'indexes' => array(
+        'inx_last_reminder' => array('last_reminder'),
+      ),
+    )
+  );
+  db_add_field('user_email_verification', 'reminders',
+    array(
+      'type' => 'int',
+      'description' => 'Number of reminders sent.',
+      'not null' => TRUE,
+      'unsigned' => TRUE,
+      'default' => 0,
+    )
+  );
 }

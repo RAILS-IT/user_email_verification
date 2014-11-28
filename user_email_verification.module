@@ -25,35 +25,8 @@ function user_email_verification_cron_queue_info() {
  */
 function user_email_verification_task($uid) {
   $account = user_load($uid);
-
-  if (!empty($account->roles) && !user_email_verification_user_skip_roles($account->roles)) {
-    $account->status = 0;
-    user_save($account);
-  }
-}
-
-/**
- * Check if the user has a skip role.
- * @param array $roles
- * @return boolean
- */
-function user_email_verification_user_skip_roles($roles) {
-  $skip = FALSE;
-  if (!empty($roles)) {
-    $roles = array_keys($roles);
-    $skip_roles = variable_get('user_email_verification_roles', array());
-    if (!empty($skip_roles)) {
-      foreach ($skip_roles as $rid => $skip_role) {
-        $skip_role = (int)$skip_role;
-        if (!empty($skip_role) && in_array($skip_role, $roles)) {
-          $skip = TRUE;
-          break;
-        }
-      }
-    }
-  }
-
-  return $skip;
+  $account->status = 0;
+  user_save($account);
 }
 
 /**
@@ -63,8 +36,21 @@ function user_email_verification_cron() {
   $timestamp = time();
   $interval = variable_get('user_email_verification_validate_interval', 86400);
 
+  $skip_roles = variable_get('user_email_verification_roles', array());
+  $skip_roles = array_filter($skip_roles);
+
   $query = db_select('user_email_verification', 'uev');
   $query->join('users', 'u', 'uev.uid = u.uid');
+
+  // Skip roles that don't need verification.
+  if (!empty($skip_roles)) {
+    $query->leftJoin('users_roles', 'ur', 'ur.uid = uev.uid');
+    $query->distinct('uev.uid');
+    $or = db_or()
+      ->condition('ur.rid', array_keys($skip_roles), 'NOT IN')
+      ->isNull('ur.rid'); // normal registered users don't have an entry in the users_roles table.
+    $query->condition($or);
+  }
 
   $result  = $query
     ->fields('u', array('uid'))
@@ -77,7 +63,6 @@ function user_email_verification_cron() {
   foreach ($result as $account) {
     $queue->createItem($account->uid);
   }
-
 }
 
 /**

@@ -36,22 +36,24 @@ function user_email_verification_task($uid) {
 /**
  * Queue worker callback for sending a single reminder.
  *
- * @param array $task
- *   The task to process.
+ * @param int $uid
+ *   The user ID to process.
  */
 function user_email_verification_reminder($uid) {
   $account = user_load($uid);
   $params['account'] = $account;
   $language = user_preferred_language($account);
-  $mail = drupal_mail('user_email_verification', 'verify', $account->mail, $language, $params);
-  // If sending was successful.
-  if (!empty($mail['result'])) {
-    db_update('user_email_verification')
-      ->condition('uid', $account->uid)
-      ->expression('reminders', 'reminders + 1')
-      ->fields(array('last_reminder' => REQUEST_TIME))
-      ->execute();
-  }
+  drupal_mail('user_email_verification', 'verify', $account->mail, $language, $params);
+
+  // Always increase the reminder mail counter by one even if sending the mail
+  // failed. Some mail systems like Mandrill return FALSE if they cannot deliver
+  // the mail to an invalid address. We need to increase the counter to make
+  // sure the users get blocked at some point.
+  db_update('user_email_verification')
+    ->condition('uid', $account->uid)
+    ->expression('reminders', 'reminders + 1')
+    ->fields(array('last_reminder' => REQUEST_TIME))
+    ->execute();
 }
 
 /**

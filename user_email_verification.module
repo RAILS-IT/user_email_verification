@@ -299,3 +299,24 @@ function user_email_verification_load_verify_flag($uid) {
 
   return FALSE;
 }
+
+/**
+ * Implements hook_user_view().
+ */
+function user_email_verification_user_view($account, $view_mode, $langcode) {
+  // Present the information if a user has a verified account.
+  if ($view_mode == "full" && user_access('administer users')) {
+
+    $account->content['user_email_verification'] = array(
+      '#type' => 'user_profile_category',
+      '#attributes' => array('class' => array('user-email-verified')),
+      '#title' => t('User email verification'),
+    );
+
+    $account->content['user_email_verification']['verified'] = array(
+      '#type' => 'user_profile_item',
+      '#title' => t('Verified account'),
+      '#markup' => user_email_verification_load_verify_flag($account->uid) ? t("Verified") : t("Not verified"),
+    );
+  }
+}

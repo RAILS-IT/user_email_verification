@@ -299,3 +299,13 @@ function user_email_verification_load_verify_flag($uid) {
 
   return FALSE;
 }
+
+/**
+ * Implements hook_views_api().
+ */
+function user_email_verification_views_api() {
+  return array(
+    'api' => 3,
+    'path' => drupal_get_path('module', 'user_email_verification') . '/views',
+  );
+}

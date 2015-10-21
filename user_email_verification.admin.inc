@@ -30,7 +30,7 @@ function user_email_verification_verify($form, &$form_state, $uid, $timestamp, $
         ->condition('uid', $account->uid, '=')
         ->execute();
 
-        drupal_set_message(t('Thank you for verifing your e-mail address.'));
+        drupal_set_message(t('Thank you for verifying your e-mail address.'));
 
         if ($account->status == 0) {
           global $language;

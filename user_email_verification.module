@@ -40,6 +40,22 @@ function user_email_verification_task($uid) {
  *   The user ID to process.
  */
 function user_email_verification_reminder($uid) {
+  // Only send the reminder if the user is not verified yet and the number of
+  // reminders has not been reached yet.
+  $interval = variable_get('user_email_verification_validate_interval', 86400);
+  $num_reminders = variable_get('user_email_verification_num_reminders', 0);
+  $reminder_interval = $interval / ($num_reminders+1);
+  $result = db_query("SELECT reminders FROM {user_email_verification} WHERE uid = :uid
+    AND verified = 0 AND reminders < :num_reminders AND last_reminder < :reminder", array(
+    ':uid' => $uid,
+    ':num_reminders' => $num_reminders,
+    ':reminder' => REQUEST_TIME - $reminder_interval,
+  ))->fetchField();
+
+  if ($result === FALSE) {
+    return;
+  }
+
   $account = user_load($uid);
   $params['account'] = $account;
   $language = user_preferred_language($account);

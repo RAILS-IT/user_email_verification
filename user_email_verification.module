@@ -220,8 +220,7 @@ function user_email_verification_user_delete($account) {
  */
 function user_email_verification_user_insert(&$edit, $account, $category) {
   db_insert('user_email_verification')
-    ->fields(array('uid', 'verified'))
-    ->values(array(
+    ->fields(array(
       'uid'        => $account->uid,
       'verified'   => 0,
       'last_reminder' => REQUEST_TIME,

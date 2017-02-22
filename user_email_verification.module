@@ -540,3 +540,19 @@ function user_email_verification_views_api() {
     'path' => drupal_get_path('module', 'user_email_verification') . '/views',
   );
 }
+
+/**
+ * Implements hook_user_presave().
+ */
+function user_email_verification_user_presave(&$edit, $account, $category) {
+  // An admin user activated a user account
+  if (user_access('administer users') && $edit['status'] == 1 && $account->original->status == 0) {
+    // Mark user as verified
+    db_update('user_email_verification')
+      ->fields(array(
+        'verified' => 1,
+      ))
+      ->condition('uid', $account->uid, '=')
+      ->execute();
+  }
+}

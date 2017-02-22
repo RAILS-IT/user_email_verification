@@ -15,6 +15,12 @@ function user_email_verification_token_info() {
     'restricted' => TRUE,
   );
 
+  $info['tokens']['user']['verify-email-extended'] = array(
+    'name' => t('Verify-email extended URL'),
+    'description' => t('The URL to verify the user e-mail after initial timeout period.'),
+    'restricted' => TRUE,
+  );
+
   return $info;
 }
 
@@ -34,6 +40,10 @@ function user_email_verification_tokens($type, $tokens, array $data = array(), a
         case 'verify-email':
           // Let's generate the verify link for this account
           $replacements[$original] = user_email_verification_url($account);
+          break;
+        case 'verify-email-extended':
+          // Let's generate the extended verify link for this account
+          $replacements[$original] = user_email_verification_extended_url($account);
           break;
       }
     }

@@ -10,7 +10,7 @@
 function user_email_verification_verify($form, &$form_state, $uid, $timestamp, $hashed_pass) {
   // Time out, in seconds, until login URL expires. Defaults to 24 hours =
   // 86400 seconds.
-  $timeout = variable_get('user_email_verification_timeout', 86400);
+  $timeout = variable_get('user_email_verification_validate_interval', 86400);
   $current = REQUEST_TIME;
   // Some redundant checks for extra security ?
   $users = user_load_multiple(array($uid), array('status' => '1'));
@@ -30,10 +30,22 @@ function user_email_verification_verify($form, &$form_state, $uid, $timestamp, $
         ->condition('uid', $account->uid, '=')
         ->execute();
 
+        if (module_exists('rules')) {
+          // Invoke rules event
+          rules_invoke_event('user_email_verification_verified_email', $account);
+        }
+
         drupal_set_message(t('Thank you for verifying your e-mail address.'));
+        watchdog('user', 'User "%name" verified e-mail address "%email".', array('%name' => $account->name, '%email' => $account->mail));
 
         if ($account->status == 0) {
           global $language;
+
+          if (module_exists('rules')) {
+            // Invoke rules event
+            rules_invoke_event('user_email_verification_verified_blocked', $account);
+          }
+
           drupal_mail('user_email_verification', 'verify_blocked', variable_get('site_mail', ''), $language, array('account' => $account));
           drupal_set_message(t('Your account has been blocked before the verification of the e-mail. ' .
             'An administrator will make an audit and unblock your account if the reason for the blocking was the e-mail verification.'));
@@ -59,6 +71,66 @@ function user_email_verification_verify($form, &$form_state, $uid, $timestamp, $
   }
 }
 
+
+/**
+ * Menu callback; processes extended verification links. Enables and verifies
+ * accounts if user clicks the link within specified time period.
+ */
+function user_email_verification_verify_extended($form, &$form_state, $uid, $timestamp, $hashed_pass) {
+  // Time out, in seconds, until extended verification URL expires. Defaults to
+  // 7 days which is 604800 seconds.
+  $extended_timeout = variable_get('user_email_verification_extended_validate_interval', 604800);
+  $current = REQUEST_TIME;
+  // Some redundant checks for extra security ?
+  $users = user_load_multiple(array($uid), array('status' => '0'));
+  if ($timestamp <= $current && $account = reset($users)) {
+    if ($current - $timestamp < $extended_timeout) {
+      $verified = user_email_verification_load_verify_flag($account->uid);
+      if (!$verified && ($hashed_pass == user_email_verification_hmac($account->uid, $timestamp))) {
+        db_update('user_email_verification')
+        ->fields(array(
+        'verified' => 1,
+        ))
+        ->condition('uid', $account->uid, '=')
+        ->execute();
+
+        // Activate blocked account
+        $account->status = 1;
+        user_save($account);
+
+        if (module_exists('rules')) {
+          // Invoke rules event
+          rules_invoke_event('user_email_verification_verified_extended_before', $account);
+        }
+
+        drupal_set_message(t('Thank you for verifying your e-mail address. Your account is now activated and you may login.'));
+        watchdog('user', 'User "%name" verified e-mail address "%email" using extended verification url.', array('%name' => $account->name, '%email' => $account->mail));
+        drupal_goto('user');
+      }
+    }
+    else {
+      // Basically this should never happend, because accounts are deleted
+      // after the extended timout is reached, but it's possible depending
+      // on cron configuration
+      if (module_exists('rules')) {
+        // Invoke rules event
+        rules_invoke_event('user_email_verification_verified_extended_after', $uid);
+      }
+
+      drupal_set_message(t('Your verify link has been exipred and account has been deleted.'));
+      watchdog('user', 'User tried to verify e-mail address with an expired link for uid: %uid.', array('%uid' => $uid));
+    }
+  }
+  else {
+    if (module_exists('rules')) {
+      // Invoke rules event
+      rules_invoke_event('user_email_verification_verified_extended_after', $uid);
+    }
+
+    drupal_set_message(t('Your account does not exist anymore. Please register a new one, or contact site administration.'));
+    watchdog('user', 'User tried to verify e-mail address for uid: %uid.', array('%uid' => $uid));
+  }
+}
 /**
  * Form builder; Request a email verification.
  *

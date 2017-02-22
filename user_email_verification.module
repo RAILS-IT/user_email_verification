@@ -18,6 +18,10 @@ function user_email_verification_cron_queue_info() {
     'worker callback' => 'user_email_verification_reminder',
     'time' => 15,
   );
+  $queues['user_email_verification_extended'] = array(
+    'worker callback' => 'user_email_verification_delete_account',
+    'time' => 15,
+  );
   return $queues;
 }
 
@@ -28,9 +32,35 @@ function user_email_verification_cron_queue_info() {
  *   The task to process.
  */
 function user_email_verification_task($uid) {
+  // Block account if active
+  user_email_verification_block_account($uid);
+}
+
+/**
+ * Block user account if active and email user if extended verification is
+ * enabled
+ */
+function user_email_verification_block_account($uid) {
   $account = user_load($uid);
-  $account->status = 0;
-  user_save($account);
+
+  // If the account is active, it shold be blocked
+  if ($account->status == 1) {
+    $account->status = 0;
+    user_save($account);
+
+    if (module_exists('rules')) {
+      // Invoke rules event
+      rules_invoke_event('user_email_verification_account_blocked', $account);
+    }
+
+    // If extended verification period is enabled, then send e-mail to user with
+    // a link which lets user to activate and verify the account within defined
+    // time period.
+    if (variable_get('user_email_verification_extended_enable', 0)) {
+      $params['account'] = $account;
+      $mail = drupal_mail('user_email_verification', 'verify_extended', $account->mail, $account->language, $params);
+    }
+  }
 }
 
 /**
@@ -61,6 +91,11 @@ function user_email_verification_reminder($uid) {
   $language = user_preferred_language($account);
   drupal_mail('user_email_verification', 'verify', $account->mail, $language, $params);
 
+  if (module_exists('rules')) {
+    // Invoke rules event
+    rules_invoke_event('user_email_verification_account_reminded', $account);
+  }
+
   // Always increase the reminder mail counter by one even if sending the mail
   // failed. Some mail systems like Mandrill return FALSE if they cannot deliver
   // the mail to an invalid address. We need to increase the counter to make
@@ -70,6 +105,44 @@ function user_email_verification_reminder($uid) {
     ->expression('reminders', 'reminders + 1')
     ->fields(array('last_reminder' => REQUEST_TIME))
     ->execute();
+}
+
+/**
+ * Queue worker callback for running a single task. Delete user account when
+ * e-mail address has not been verified after extended verification period
+ * has passed.
+ *
+ * @param $uid
+ *   User ID to be deleted
+ */
+function user_email_verification_delete_account($uid) {
+  // Load the account before canceling it
+  $account = user_load($uid);
+
+  if ($account) {
+    if (module_exists('rules')) {
+      // Invoke rules event
+      rules_invoke_event('user_email_verification_account_deleted', $account);
+    }
+
+    // Notify account about cancellation
+    $op = 'status_canceled';
+    _user_mail_notify($op, $account);
+
+    // Get the cancel method
+    $user_cancel_method = variable_get('user_cancel_method');
+    user_cancel(array(), $uid, $user_cancel_method);
+
+    // user_cancel() initiates a batch process. Run it manually.
+    $batch =& batch_get();
+    $batch['progressive'] = FALSE;
+    batch_process();
+
+    watchdog('user', 'User with uid %uid has been deleted due to e-mail address not being verified within extended verification period.', array('%uid' => $uid));
+  }
+  else {
+    watchdog('user', 'User with uid %uid could not be deleted because the uid does not exist anymore.', array('%uid' => $uid));
+  }
 }
 
 /**
@@ -134,6 +207,42 @@ function user_email_verification_cron() {
   foreach ($result as $account) {
     $queue->createItem($account->uid);
   }
+
+
+  if (variable_get('user_email_verification_extended_enable', 0)) {
+    // Delete accounts which have not verified their e-mail addresses
+    // within extended time period. Similar to blocking users, but doesn't
+    // care about reminder settings.
+    $extended_interval = variable_get('user_email_verification_extended_validate_interval', 86400);
+
+    $skip_roles = variable_get('user_email_verification_roles', array());
+    $skip_roles = array_filter($skip_roles);
+
+    // Select those that need to be blocked.
+    $query = db_select('user_email_verification', 'uev');
+    $query->join('users', 'u', 'uev.uid = u.uid');
+
+    if (!empty($skip_roles)) {
+      $query->leftJoin('users_roles', 'ur', 'ur.uid = uev.uid');
+      $query->distinct('uev.uid');
+      $or = db_or()
+        ->condition('ur.rid', array_keys($skip_roles), 'NOT IN')
+        ->isNull('ur.rid'); // normal registered users don't have an entry in the users_roles table.
+      $query->condition($or);
+    }
+
+    $result = $query
+      ->fields('u', array('uid'))
+      ->condition('uev.verified', 0, '=')
+      ->condition('u.uid', 1, '>')
+      ->condition('uev.last_reminder', REQUEST_TIME - $extended_interval, '<')
+      ->execute();
+
+    $queue = DrupalQueue::get('user_email_verification_extended');
+    foreach ($result as $account) {
+      $queue->createItem($account->uid);
+    }
+  }
 }
 
 /**
@@ -154,6 +263,15 @@ function user_email_verification_menu() {
     'title' => 'Verify user e-mail',
     'page callback' => 'drupal_get_form',
     'page arguments' => array('user_email_verification_verify', 2, 3, 4),
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+    'file' => 'user_email_verification.admin.inc',
+  );
+
+  $items['user/email-verify-extended/%/%/%'] = array(
+    'title' => 'Verify user e-mail',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('user_email_verification_verify_extended', 2, 3, 4),
     'access callback' => TRUE,
     'type' => MENU_CALLBACK,
     'file' => 'user_email_verification.admin.inc',
@@ -205,7 +323,64 @@ function user_email_verification_form_user_admin_settings_alter(&$form, &$form_s
     '#description' => t('Select the number of reminders to be sent spread equally through the time interval in which the user must validate his/her e-mail.'),
   );
 
-  //TODO: Add the e-mail templates to be manageble through account settings.
+  $form['user_email_verification']['user_email_verification_subject'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Verification mail subject'),
+    '#default_value' => variable_get('user_email_verification_subject', t('Verification e-mail')),
+    '#maxlength' => 180,
+    '#description' => t('Subject for e-mail when user is requesting a new verification link at /user/verify. <strong>On registration user will receive the core\'s "Welcome (no approval required)" message.</strong>'),
+  );
+
+  $form['user_email_verification']['user_email_verification_body'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Verification mail body'),
+    '#default_value' => variable_get('user_email_verification_body', t('Please verify your e-mail by following the link: [user:verify-email]')),
+    '#rows' => 10,
+    '#description' => t('Among other tokens, [user:verify-email] can be used to display the link to e-mail verification.'),
+  );
+
+  $form['user_email_verification']['user_email_verification_extended_enable'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Enable extended verification period'),
+    '#default_value' => variable_get('user_email_verification_extended_enable', 0),
+    '#description' => t('Extended verification period allows you to define another time period when the account can be still verified even after being blocked.'),
+  );
+
+  $form['user_email_verification']['extended'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Extended verification period'),
+    // Hide the extended settings when disabled.
+    '#states' => array(
+      'invisible' => array(
+        'input[name="user_email_verification_extended_enable"]' => array('checked' => FALSE),
+      ),
+    ),
+  );
+
+  $form['user_email_verification']['extended']['user_email_verification_extended_validate_interval'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Extended verification time interval'),
+    '#required' => FALSE,
+    '#default_value' => variable_get('user_email_verification_extended_validate_interval', 604800),
+    '#description' => t('Enter the extended time interval in seconds in which the user must validate his/her e-mail before the account gets deleted completely.'),
+    '#element_validate' => array('element_validate_number'),
+  );
+
+  $form['user_email_verification']['extended']['user_email_verification_extended_subject'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Mail subject'),
+    '#default_value' => variable_get('user_email_verification_extended_subject', t('Account blocked, please verify e-mail address')),
+    '#maxlength' => 180,
+    '#description' => t('Subject for e-mail when an account is blocked after not being verified.'),
+  );
+
+  $form['user_email_verification']['extended']['user_email_verification_extended_body'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Mail body'),
+    '#default_value' => variable_get('user_email_verification_extended_body', t('Your account is now blocked. Your e-mail may still be verified by following the link: [user:verify-email-extended]')),
+    '#rows' => 10,
+    '#description' => t('Among other tokens, [user:verify-email-extended] can be used to display the link to e-mail verification.'),
+  );
 }
 
 /**
@@ -239,12 +414,12 @@ function user_email_verification_mail_alter(&$message) {
     $account = $params['account'];
     if (!empty($account)) {
       if (!empty($message['subject'])) {
-        $message['subject'] = str_replace('[user:verify-email]', user_email_verification_url($account), $message['subject']);
+        $message['subject'] = token_replace($message['subject'], array('user' => $account), array('language' => $language, 'sanitize' => FALSE, 'clear' => TRUE));
       }
 
       if (!empty($message['body'])) {
         foreach ($message['body'] as &$body) {
-          $body = str_replace('[user:verify-email]', user_email_verification_url($account), $body);
+          $body = token_replace($body, array('user' => $account), array('language' => $language, 'sanitize' => FALSE, 'clear' => TRUE));
         }
       }
     }
@@ -265,13 +440,21 @@ function user_email_verification_mail($key, &$message, $params) {
 
   if ($key == 'verify_blocked') {
     $account = $params['account'];
-    $message['subject'] .= t('An blocked account verify his e-mail.');
-    $message['body'][] = t('The blocked account ID: @AID validated his e-mail. If the account is not blocked for other reason, please unblock the account.');
+    $message['subject'] .= t('A blocked account verified his e-mail.');
+    $message['body'][] = t('A blocked account ID: @AID verified his e-mail. If the account is not blocked for other reason, please unblock the account.');
+  }
+
+  if ($key == 'verify_extended') {
+    $account = $params['account'];
+    $message['subject'] .= variable_get('user_email_verification_extended_subject', t('Account blocked, please verify e-mail address'));
+    $message['body'][] = variable_get('user_email_verification_extended_body', t('Your account is now blocked. Your e-mail may still be verified by following the link: [user:verify-email-extended]'));
   }
 }
 
+/**
+ * Send e-mail to user when they request a new verification link
+ */
 function user_email_verification_mail_notify($op, $account, $language = NULL) {
-  // By default, we always notify except for canceled and blocked.
   $params['account'] = $account;
   $language = $language ? $language : user_preferred_language($account);
   $mail = drupal_mail('user_email_verification', 'verify', $account->mail, $language, $params);
@@ -288,6 +471,18 @@ function user_email_verification_url($account) {
   $hmac = user_email_verification_hmac($account->uid, $timestamp);
 
   return url("user/email-verify/$account->uid/$timestamp/" . $hmac, array('absolute' => TRUE));
+}
+
+/**
+ * Generate the
+ * @param unknown $account
+ * @return string
+ */
+function user_email_verification_extended_url($account) {
+  $timestamp = REQUEST_TIME;
+  $hmac = user_email_verification_hmac($account->uid, $timestamp);
+
+  return url("user/email-verify-extended/$account->uid/$timestamp/" . $hmac, array('query' => array('language' => $account->language), 'absolute' => TRUE));
 }
 
 /**

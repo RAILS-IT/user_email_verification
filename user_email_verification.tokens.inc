@@ -32,8 +32,8 @@ function user_email_verification_tokens($type, $tokens, array $data = array(), a
       switch ($name) {
         // Basic user account information.
         case 'verify-email':
-          // In the case of hook user_presave uid is not set yet.
-          $replacements[$original] = $original;
+          // Let's generate the verify link for this account
+          $replacements[$original] = user_email_verification_url($account);
           break;
       }
     }

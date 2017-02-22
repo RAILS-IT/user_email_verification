@@ -239,12 +239,12 @@ function user_email_verification_mail_alter(&$message) {
     $account = $params['account'];
     if (!empty($account)) {
       if (!empty($message['subject'])) {
-        $message['subject'] = str_replace('[user:verify-email]', user_email_verification_url($account), $message['subject']);
+        $message['subject'] = token_replace($message['subject'], array('user' => $account), array('language' => $language, 'sanitize' => FALSE, 'clear' => TRUE));
       }
 
       if (!empty($message['body'])) {
         foreach ($message['body'] as &$body) {
-          $body = str_replace('[user:verify-email]', user_email_verification_url($account), $body);
+          $body = token_replace($body, array('user' => $account), array('language' => $language, 'sanitize' => FALSE, 'clear' => TRUE));
         }
       }
     }

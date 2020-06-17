@@ -1,6 +1,0 @@
-name = User email verification
-description = "Verify the user's e-mail. If the e-mail of the user is not verified the system will block the user."
-core = 7.x
-package = UtilisIO
-
-configure = admin/config/people/accounts

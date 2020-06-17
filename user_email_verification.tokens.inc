@@ -5,21 +5,22 @@
  * Builds placeholder replacement tokens for user-related data.
  */
 
+use Drupal\Core\Render\BubbleableMetadata;
+use Drupal\user\UserInterface;
+
 /**
  * Implements hook_token_info().
  */
 function user_email_verification_token_info() {
-  $info['tokens']['user']['verify-email'] = array(
+  $info['tokens']['user']['verify-email'] = [
     'name' => t('Verify-email URL'),
-    'description' => t('The URL to verify the user e-mail.'),
-    'restricted' => TRUE,
-  );
+    'description' => t('The URL to verify the user Email.'),
+  ];
 
-  $info['tokens']['user']['verify-email-extended'] = array(
+  $info['tokens']['user']['verify-email-extended'] = [
     'name' => t('Verify-email extended URL'),
-    'description' => t('The URL to verify the user e-mail after initial timeout period.'),
-    'restricted' => TRUE,
-  );
+    'description' => t('The URL to verify the user Email after initial timeout period.'),
+  ];
 
   return $info;
 }
@@ -27,23 +28,22 @@ function user_email_verification_token_info() {
 /**
  * Implements hook_tokens().
  */
-function user_email_verification_tokens($type, $tokens, array $data = array(), array $options = array()) {
-  $sanitize = !empty($options['sanitize']);
+function user_email_verification_tokens($type, $tokens, array $data, array $options, BubbleableMetadata $bubbleable_metadata) {
+  $replacements = [];
 
-  $replacements = array();
+  if ($type == 'user' && isset($data['user']) && $data['user'] instanceof UserInterface) {
+    /** @var \Drupal\user_email_verification\UserEmailVerificationInterface $service */
+    $service = \Drupal::service('user_email_verification.service');
 
-  if ($type == 'user' && !empty($data['user'])) {
-    $account = $data['user'];
     foreach ($tokens as $name => $original) {
       switch ($name) {
-        // Basic user account information.
+
         case 'verify-email':
-          // Let's generate the verify link for this account
-          $replacements[$original] = user_email_verification_url($account);
+          $replacements[$original] = $service->buildVerificationUrl($data['user'])->toString();
           break;
+
         case 'verify-email-extended':
-          // Let's generate the extended verify link for this account
-          $replacements[$original] = user_email_verification_extended_url($account);
+          $replacements[$original] = $service->buildExtendedVerificationUrl($data['user'])->toString();
           break;
       }
     }

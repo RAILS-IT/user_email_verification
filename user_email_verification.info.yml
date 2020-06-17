@@ -1,0 +1,10 @@
+name: 'User Email Verification'
+type: module
+description: 'Verify the user Email. If the Email of the user is not verified the system will block the user.'
+package: User
+
+core_version_requirement: ^8 || ^9
+configure: entity.user.admin_form
+
+dependencies:
+  - drupal:user

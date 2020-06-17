@@ -32,3 +32,18 @@ user_email_verification.settings:
     extended_mail_body:
       type: text
       label: 'Extended verification mail body'
+
+block.settings.user_email_verification_notification:
+  type: block_settings
+  label: 'User Email verification notification'
+  mapping:
+    notification:
+      type: mapping
+      label: 'Notification message'
+      mapping:
+        value:
+          type: text
+          label: 'Notification message text'
+        format:
+          type: string
+          label: 'Notification message format'
